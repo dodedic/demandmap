@@ -1,6 +1,12 @@
+import pandas as pd
 import panel as pn
 import plotly.graph_objects as go
-import airport_check  # Assuming airport_check contains the ICAO_check function
+import plotly.express as px
+import scipy.sparse
+import numpy as np
+import json
+
+import airport_check  # Assuming airport_check contains the ICAO_check and airport_location functions
 
 pn.extension('plotly')
 
@@ -15,7 +21,6 @@ TEXT_INPUT_CSS = """
 :host(.validation-error) input.bk-input {
     border-color: red !important;  /* Red border for validation error */
     background-color: rgba(255, 0, 0, 0.3) !important;  /* Red background with transparency for validation error */
-
 }
 :host(.validation-success) input.bk-input {
     border-color: green !important;  /* Green border for validation success */
@@ -23,6 +28,21 @@ TEXT_INPUT_CSS = """
 """
 
 pn.extension(raw_css=[raw_css])
+
+# Load the sparse matrix and labels
+sparse_matrix = scipy.sparse.load_npz('01-January.npz')
+labels = np.load('01-January_labels.npz', allow_pickle=True)
+
+# Load the row and column labels
+row_labels = labels['rows']
+col_labels = labels['cols']
+
+# Load the country codes from JSON file
+with open('CountryCodes.json', 'r') as file:
+    country_codes = json.load(file)
+
+# Load the GDP data
+gdp_data = pd.read_csv('GDPData.csv')
 
 # TextInput widgets for entering ICAO codes
 icao_departure_input = pn.widgets.TextInput(value='',
@@ -64,7 +84,7 @@ fig.update_layout(
         showcountries=True, countrycolor="lightgrey",
     ),
     width=1200,  # Adjust the width of the figure
-    height=650,
+    height=700,
     margin=dict(l=10, r=10, t=10, b=70),
     legend=dict(
         y=0,  # Position the legend below the map
@@ -159,26 +179,66 @@ def add_flight_line():
     )
     fig.add_trace(flight_line)
 
-# Callback to validate and update departure marker on input change
-@pn.depends(icao_departure_input, watch=True)
-def validate_departure(value):
-    if airport_check.ICAO_check(value):
-        icao_departure_input.css_classes = ["validation-success"]
-        add_airport_marker_departure(value)
-    else:
-        icao_departure_input.css_classes = ["validation-error"]
+# Function to get the GDP growth rates for a country
+def get_gdp_growth_rates(departure_code):
+    country_code = country_codes.get(departure_code[:2])
+    if country_code:
+        gdp_row = gdp_data[gdp_data.iloc[:, 1] == country_code]
+        if not gdp_row.empty:
+            growth_rates = gdp_row.loc[:, '2024':].values.flatten() / 100  # Assuming the GDP growth is in percentage
+            return growth_rates
+    return None
 
-# Callback to validate and update destination marker on input change
-@pn.depends(icao_destination_input, watch=True)
-def validate_destination(value):
-    if airport_check.ICAO_check(value):
-        icao_destination_input.css_classes = ["validation-success"]
-        add_airport_marker_destination(value)
+# Function to get the value from the sparse matrix
+def get_sparse_value(departure_code, destination_code):
+    try:
+        departure_idx = np.where(row_labels == departure_code)[0][0]
+        destination_idx = np.where(col_labels == destination_code)[0][0]
+        return sparse_matrix[departure_idx, destination_idx]
+    except IndexError:
+        return None
+
+# Function to create a DataFrame for the table with projected values
+def create_forecast_dataframe(initial_value, growth_rates):
+    years = list(range(2024, 2051))
+    seats = [initial_value]
+    last_growth_rate = growth_rates[0]
+    for i in range(1, len(years)):
+        if i < len(growth_rates):
+            growth_rate = growth_rates[i-1]
+        else:
+            growth_rate = last_growth_rate
+        seats.append(seats[-1] * (1 + growth_rate))
+    data = pd.DataFrame({'Year': years, 'Seats': seats})
+    return data
+
+# Callback to update the table and the line graph based on the ICAO codes
+@pn.depends(icao_departure_input, icao_destination_input, watch=True)
+def update_forecast_table(departure_code, destination_code):
+    value = get_sparse_value(departure_code, destination_code)
+    growth_rates = get_gdp_growth_rates(departure_code)
+    if value is not None and growth_rates is not None:
+        data = create_forecast_dataframe(value, growth_rates)
+        styled_data = data.style.set_table_styles({
+            'Year': [{'selector': 'th', 'props': [('width', '100px')]}],
+            'Seats': [{'selector': 'th', 'props': [('width', '100px')]}]
+        }).hide(axis='index')
+        html_data = styled_data.to_html()
+        dataframe_pane.object = html_data
+        line_fig = px.line(data, x='Year', y='Seats', title='Seats Forecast', markers=True)
+        line_graph_pane.object = line_fig
     else:
-        icao_destination_input.css_classes = ["validation-error"]
+        dataframe_pane.object = "Invalid ICAO codes or data not available."
+        line_graph_pane.object = None
 
 # Create a Panel pane for the Plotly figure with custom CSS class
-map_pane = pn.pane.Plotly(fig, css_classes=['panel-column'])  # Apply custom CSS class
+map_pane = pn.pane.Plotly(fig, css_classes=['panel-column'], height=700)  # Adjusted height for the map
+
+# Create a Panel HTML pane to display the DataFrame
+dataframe_pane = pn.pane.HTML(width=400)
+
+# Create a Panel pane for the Plotly line graph
+line_graph_pane = pn.pane.Plotly(width=700)
 
 # Markdown pane for the title
 title_pane = pn.pane.Markdown("# Aviation Forecast")
@@ -194,14 +254,18 @@ layout = pn.Column(
         load_factor,
         sizing_mode='stretch_width'
     ),
+    pn.Spacer(height=20),  # Add spacer for separation
     pn.Row(
         map_pane,
-        align='start',
         sizing_mode='stretch_both'  # Ensure the map pane stretches to fill available space
     ),
-    sizing_mode='stretch_width',  # Ensure the entire layout stretches horizontally
+    pn.Spacer(height=20),  # Add spacer for separation
+    pn.Row(
+        dataframe_pane,
+        line_graph_pane,
+        sizing_mode='stretch_both'  # Ensure the panes stretch to fill available space
+    ),
+    sizing_mode='stretch_width'  # Ensure the entire layout stretches horizontally
 )
 
 layout.servable()
-
-
