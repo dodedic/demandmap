@@ -4,17 +4,14 @@ import json
 import sys
 from pathlib import Path
 
-def create_flight_connections_plot(plot_whole_year, month=None):
-    # Determine the current directory
-    current_directory = Path(__file__).resolve().parent
+# Ensure the correct module path is added
+current_directory = Path(__file__).resolve().parent
+api_aerodatabox_path = current_directory.parents[0] / 'api_aerodatabox'
+sys.path.insert(0, str(api_aerodatabox_path))
 
-    # Add the path to the api_aerodatabox folder to sys.path
-    api_aerodatabox_path = current_directory.parents[0] / 'api_aerodatabox'
-    sys.path.insert(0, str(api_aerodatabox_path))
+import data_transformation_pandas
 
-    # Now you can import the module
-    import data_transformation_pandas
-
+def create_flight_connections_plot(fig, plot_whole_year, month=None):
     # File path for storing flight connection data
     file_path = api_aerodatabox_path / "connection_data" / "flight_connections_year.json"
 
@@ -52,23 +49,12 @@ def create_flight_connections_plot(plot_whole_year, month=None):
         print(f"The file '{file_path}' already exists. File will not be created again")
 
     # Plotting
-
-    # If plotting the whole year, process flight connection data for the entire year
-    if plot_whole_year:
-        print("The whole year will be plotted")
-        flight_data_df, daily_flights_df = data_transformation_pandas.process_flight_connections("Year")
-    else:
-        # If not plotting the whole year, process flight connection data for the specified month
-        if month not in month_list:
-            raise ValueError(f"Enter a valid month from the list: {month_list}")
-        flight_data_df, daily_flights_df = data_transformation_pandas.process_flight_connections(month)
-        print(f"All flight connections for {month} will be plotted")
+    flight_data_df, daily_flights_df = data_transformation_pandas.process_flight_connections("Year")
 
     # Calculate the maximum value of 'daily_flights' column
     max_daily_flights = daily_flights_df['number_of_total_flights'].max()
 
-    # Number of total connections
-    total_connections = len(flight_data_df)
+    flight_data_df = flight_data_df[flight_data_df['averageDailyFlights'] > 1].reset_index(drop=True)
 
     # Define maximum and minimum sizes for markers
     max_size = 20
@@ -80,7 +66,7 @@ def create_flight_connections_plot(plot_whole_year, month=None):
                     (max_size - min_size)) + min_size
 
     # Plot the different airport markers
-    fig = go.Figure(go.Scattergeo(
+    fig.add_trace(go.Scattergeo(
         lat=daily_flights_df["lat_departure"],
         lon=daily_flights_df["lon_departure"],
         text=daily_flights_df["departure_airport_name"] + '<br>'
@@ -88,6 +74,7 @@ def create_flight_connections_plot(plot_whole_year, month=None):
         + daily_flights_df["number_of_total_flights"].apply(lambda x: round(x, 2)).astype(str),  # Round to 2 decimal places
         hoverinfo='text',  # Set hoverinfo to 'text'
         mode='markers',
+        showlegend=False,
         marker=dict(
             size=scaled_sizes,  # Scale the sizes between min and max sizes
             opacity=0.9,
@@ -96,19 +83,8 @@ def create_flight_connections_plot(plot_whole_year, month=None):
             colorscale='Bluered',
             cmin=0,
             color=daily_flights_df['number_of_total_flights'],
-            cmax=max_daily_flights,  # Use the calculated maximum value
-            colorbar=dict(
-                title="Average Daily Departing Flights per year",
-                titleside="bottom",
-                titlefont=dict(size=14),
-                tickfont=dict(size=12),
-                x=0.5,  # Center horizontally
-                y=-0.2,  # Position below the map
-                len=0.75,  # Increase length of the color bar
-                orientation='h',
-                xanchor='center',
-                yanchor='bottom'
-            )
+            cmax=max_daily_flights,
+            colorbar_title="Average flights per day",
         )
     ))
 
@@ -131,24 +107,8 @@ def create_flight_connections_plot(plot_whole_year, month=None):
                 line=dict(width=1, color='white'),
                 opacity=scaled_opacities[i],  # Use scaled opacities
                 hoverinfo='skip',
+                showlegend=False,
             )
         )
-
-    # Update layout of the figure
-    fig.update_layout(
-        title=f'Air Traffic Worldmap<br>Number of total different connections: {total_connections}',
-        showlegend=False,
-    )
-
-    # Update layout of the geospatial plot
-    fig.update_geos(
-        projection_type="natural earth",
-        resolution=50,
-        showcoastlines=True, coastlinecolor="lightgrey",
-        showland=True, landcolor="black",
-        showocean=True, oceancolor="dimgrey",
-        showlakes=True, lakecolor="black",
-        showcountries=True, countrycolor="lightgrey",
-    )
 
     return fig
