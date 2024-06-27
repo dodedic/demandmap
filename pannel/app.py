@@ -5,10 +5,9 @@ import plotly.express as px
 import scipy.sparse
 import numpy as np
 import json
+import airport_check  # Assuming airport_check contains the ICAO_check function
 
-import airport_check  # Assuming airport_check contains the ICAO_check and airport_location functions
-
-pn.extension('plotly')
+pn.extension('plotly', 'vega')
 
 # Define CSS class for border styling
 raw_css = """
@@ -43,6 +42,22 @@ with open('CountryCodes.json', 'r') as file:
 
 # Load the GDP data
 gdp_data = pd.read_csv('GDPData.csv')
+
+# Debugging prints
+print("Country Codes Loaded:")
+print(country_codes)
+print("\nGDP Data Loaded:")
+print(gdp_data.head())
+print(gdp_data.columns)
+print(gdp_data.dtypes)
+
+# Ensure there are no leading/trailing spaces in country codes and relevant columns
+gdp_data['ISO'] = gdp_data['ISO'].str.strip()
+country_codes = {k.strip(): v.strip() for k, v in country_codes.items()}
+
+# Print unique values in the second column to ensure there are no formatting issues
+print("Unique values in the ISO column of GDP data:")
+print(gdp_data['ISO'].unique())
 
 # TextInput widgets for entering ICAO codes
 icao_departure_input = pn.widgets.TextInput(value='',
@@ -84,7 +99,7 @@ fig.update_layout(
         showcountries=True, countrycolor="lightgrey",
     ),
     width=1200,  # Adjust the width of the figure
-    height=700,
+    height=650,
     margin=dict(l=10, r=10, t=10, b=70),
     legend=dict(
         y=0,  # Position the legend below the map
@@ -179,16 +194,6 @@ def add_flight_line():
     )
     fig.add_trace(flight_line)
 
-# Function to get the GDP growth rates for a country
-def get_gdp_growth_rates(departure_code):
-    country_code = country_codes.get(departure_code[:2])
-    if country_code:
-        gdp_row = gdp_data[gdp_data.iloc[:, 1] == country_code]
-        if not gdp_row.empty:
-            growth_rates = gdp_row.loc[:, '2024':].values.flatten() / 100  # Assuming the GDP growth is in percentage
-            return growth_rates
-    return None
-
 # Function to get the value from the sparse matrix
 def get_sparse_value(departure_code, destination_code):
     try:
@@ -198,50 +203,97 @@ def get_sparse_value(departure_code, destination_code):
     except IndexError:
         return None
 
-# Function to create a DataFrame for the table with projected values
-def create_forecast_dataframe(initial_value, growth_rates):
-    years = list(range(2024, 2051))
-    seats = [initial_value]
-    last_growth_rate = growth_rates[0]
-    for i in range(1, len(years)):
-        if i < len(growth_rates):
-            growth_rate = growth_rates[i-1]
-        else:
-            growth_rate = last_growth_rate
-        seats.append(seats[-1] * (1 + growth_rate))
-    data = pd.DataFrame({'Year': years, 'Seats': seats})
-    return data
+# Function to get the GDP growth rate for a country
+def get_gdp_growth_rate(departure_code):
+    country_code = country_codes.get(departure_code[:2])
+    print(f"Departure ICAO: {departure_code}, Country code: {country_code}")  # Debugging line
+    if country_code:
+        gdp_row = gdp_data[gdp_data['ISO'] == country_code]
+        print(f"GDP row for country code {country_code}: {gdp_row}")  # Debugging line
+        if not gdp_row.empty:
+            try:
+                growth_rate = float(gdp_row['2024'].values[0]) / 100  # Assuming the GDP growth is in percentage
+                print(f"GDP growth rate: {growth_rate}")  # Debugging line
+                return growth_rate
+            except Exception as e:
+                print(f"Error retrieving growth rate: {e}")
+    return None
 
-# Callback to update the table and the line graph based on the ICAO codes
-@pn.depends(icao_departure_input, icao_destination_input, watch=True)
-def update_forecast_table(departure_code, destination_code):
+# Create a DataFrame for the additional data
+df = pd.DataFrame({
+    'Year': list(range(2024, 2051)),
+    'Seats': [0] * 27
+})
+
+# Callback to update the Seats value for 2024 based on ICAO codes
+@pn.depends(icao_departure_input.param.value, icao_destination_input.param.value, watch=True)
+def update_seats(departure_code, destination_code):
     value = get_sparse_value(departure_code, destination_code)
-    growth_rates = get_gdp_growth_rates(departure_code)
-    if value is not None and growth_rates is not None:
-        data = create_forecast_dataframe(value, growth_rates)
-        styled_data = data.style.set_table_styles({
-            'Year': [{'selector': 'th', 'props': [('width', '100px')]}],
-            'Seats': [{'selector': 'th', 'props': [('width', '100px')]}]
-        }).hide(axis='index')
-        html_data = styled_data.to_html()
-        dataframe_pane.object = html_data
-        line_fig = px.line(data, x='Year', y='Seats', title='Seats Forecast', markers=True)
-        line_graph_pane.object = line_fig
+    growth_rate = get_gdp_growth_rate(departure_code)
+    print(f"Initial value from sparse matrix: {value}")  # Debugging line
+    if value is not None:
+        df.at[0, 'Seats'] = value
+        if growth_rate is not None:
+            for i in range(1, len(df)):
+                df.at[i, 'Seats'] = df.at[i - 1, 'Seats'] * (1 + growth_rate)
+                print(f"Year: {df.at[i, 'Year']}, Seats: {df.at[i, 'Seats']}, Growth Rate: {growth_rate}")  # Debugging line
+        else:
+            for i in range(1, len(df)):
+                df.at[i, 'Seats'] = df.at[i - 1, 'Seats']
     else:
-        dataframe_pane.object = "Invalid ICAO codes or data not available."
-        line_graph_pane.object = None
+        df['Seats'] = 0
+    
+    # Update the DataFrame and line plot
+    styled_data = df.style.set_table_styles({
+        'Year': [{'selector': 'th', 'props': [('width', '100px')]}],
+        'Seats': [{'selector': 'th', 'props': [('width', '100px')]}]
+    }).hide(axis='index').to_html()
+    
+    dataframe_pane.object = styled_data
+    line_fig = px.line(df, x='Year', y='Seats', title='Seats Forecast', markers=True)
+    line_graph_pane.object = line_fig
+
+# Callback to validate and update departure marker on input change
+@pn.depends(icao_departure_input.param.value, watch=True)
+def validate_departure(value):
+    if airport_check.ICAO_check(value):
+        icao_departure_input.css_classes = ["validation-success"]
+        add_airport_marker_departure(value)
+    else:
+        icao_departure_input.css_classes = ["validation-error"]
+
+# Callback to validate and update destination marker on input change
+@pn.depends(icao_destination_input.param.value, watch=True)
+def validate_destination(value):
+    if airport_check.ICAO_check(value):
+        icao_destination_input.css_classes = ["validation-success"]
+        add_airport_marker_destination(value)
+    else:
+        icao_destination_input.css_classes = ["validation-error"]
+
+# Create the initial line plot using Plotly Express
+line_fig = px.line(df, x='Year', y='Seats', title='Seats Forecast', markers=True)
+
+# Convert the DataFrame to an HTML table
+styled_data = df.style.set_table_styles({
+    'Year': [{'selector': 'th', 'props': [('width', '100px')]}],
+    'Seats': [{'selector': 'th', 'props': [('width', '100px')]}]
+}).hide(axis='index').to_html()
 
 # Create a Panel pane for the Plotly figure with custom CSS class
-map_pane = pn.pane.Plotly(fig, css_classes=['panel-column'], height=700)  # Adjusted height for the map
+map_pane = pn.pane.Plotly(fig, css_classes=['panel-column'])  # Apply custom CSS class
 
 # Create a Panel HTML pane to display the DataFrame
-dataframe_pane = pn.pane.HTML(width=400)
+dataframe_pane = pn.pane.HTML(styled_data, width=400, height=200)
 
 # Create a Panel pane for the Plotly line graph
-line_graph_pane = pn.pane.Plotly(width=700)
+line_graph_pane = pn.pane.Plotly(line_fig, width=700, height=400)
 
 # Markdown pane for the title
 title_pane = pn.pane.Markdown("# Aviation Forecast")
+
+# Spacer to separate the map and the table
+spacer = pn.Spacer(height=500)
 
 # Layout: arrange vertically with title, input fields, their respective output fields, and the map below
 layout = pn.Column(
@@ -254,16 +306,17 @@ layout = pn.Column(
         load_factor,
         sizing_mode='stretch_width'
     ),
-    pn.Spacer(height=20),  # Add spacer for separation
     pn.Row(
         map_pane,
+        align='start',
         sizing_mode='stretch_both'  # Ensure the map pane stretches to fill available space
     ),
-    pn.Spacer(height=20),  # Add spacer for separation
+    spacer,
     pn.Row(
         dataframe_pane,
         line_graph_pane,
-        sizing_mode='stretch_both'  # Ensure the panes stretch to fill available space
+        align='start',
+        sizing_mode='stretch_both'  # Ensure the DataFrame and line plot panes stretch to fill available space
     ),
     sizing_mode='stretch_width'  # Ensure the entire layout stretches horizontally
 )

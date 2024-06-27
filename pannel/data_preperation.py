@@ -82,7 +82,7 @@ def prepare_airport_data():
     for icao_airport in airport_list_df['icao']:
         file_path = api_aerodatabox_path / f"airport_data/airports_detail_data/{icao_airport}.json"
         if file_path.exists():
-            with open(file_path, 'r') as f:
+            with open(file_path, 'r',encoding='utf-8') as f:
                 airport_info = json.load(f)
             airport = {
                 'icao': icao_airport,
