@@ -1,9 +1,9 @@
+import numpy as np
 import pandas as pd
 import panel as pn
 import plotly.graph_objects as go
 import plotly.express as px
 import scipy.sparse
-import numpy as np
 import json
 import airport_check  # Assuming airport_check contains the ICAO_check function
 
@@ -43,22 +43,6 @@ with open('CountryCodes.json', 'r') as file:
 # Load the GDP data
 gdp_data = pd.read_csv('GDPData.csv')
 
-# Debugging prints
-print("Country Codes Loaded:")
-print(country_codes)
-print("\nGDP Data Loaded:")
-print(gdp_data.head())
-print(gdp_data.columns)
-print(gdp_data.dtypes)
-
-# Ensure there are no leading/trailing spaces in country codes and relevant columns
-gdp_data['ISO'] = gdp_data['ISO'].str.strip()
-country_codes = {k.strip(): v.strip() for k, v in country_codes.items()}
-
-# Print unique values in the second column to ensure there are no formatting issues
-print("Unique values in the ISO column of GDP data:")
-print(gdp_data['ISO'].unique())
-
 # TextInput widgets for entering ICAO codes
 icao_departure_input = pn.widgets.TextInput(value='',
                                             description="Enter correct departure ICAO code",
@@ -74,9 +58,9 @@ icao_destination_input = pn.widgets.TextInput(value='',
                                               width=100,
                                               stylesheets=[TEXT_INPUT_CSS])  # Add a CSS class for styling
 
-select = pn.widgets.Select(name='Legs', 
-                           options=['One-way', 'Round-trip'], 
-                           width=100,)
+select = pn.widgets.Select(name='Legs',
+                           options=['One-way', 'Round-trip'],
+                           width=100, )
 
 year = pn.widgets.IntSlider(name='Year', start=2023, end=2050, step=1, value=2023, width=200)
 load_factor = pn.widgets.FloatSlider(name='Load Factor', start=0, end=1, step=0.01, value=0.8, width=200)
@@ -84,7 +68,7 @@ load_factor = pn.widgets.FloatSlider(name='Load Factor', start=0, end=1, step=0.
 # Create the blank world map
 fig = go.Figure(data=go.Choropleth(
     locations=[],  # No data for countries
-    z=[],          # No data for color scale
+    z=[],  # No data for color scale
 ))
 
 # Update the layout for the map
@@ -122,7 +106,7 @@ def add_airport_marker_departure(location):
         # Remove the previous departure marker if it exists
         if departure_marker is not None:
             fig.data = [trace for trace in fig.data if trace != departure_marker]
-        
+
         # Add new departure marker
         departure_marker = go.Scattergeo(
             lon=[lon],
@@ -138,7 +122,7 @@ def add_airport_marker_departure(location):
             showlegend=True  # Ensure legend is shown
         )
         fig.add_trace(departure_marker)
-        
+
         # Update flight line if destination exists
         if destination_marker is not None:
             add_flight_line()
@@ -151,7 +135,7 @@ def add_airport_marker_destination(location):
         # Remove the previous destination marker if it exists
         if destination_marker is not None:
             fig.data = [trace for trace in fig.data if trace != destination_marker]
-        
+
         # Add new destination marker
         destination_marker = go.Scattergeo(
             lon=[lon],
@@ -167,7 +151,7 @@ def add_airport_marker_destination(location):
             showlegend=True  # Ensure legend is shown
         )
         fig.add_trace(destination_marker)
-        
+
         # Update flight line if departure exists
         if departure_marker is not None:
             add_flight_line()
@@ -179,11 +163,11 @@ def add_flight_line():
     departure_lon = departure_marker['lon'][0]
     destination_lat = destination_marker['lat'][0]
     destination_lon = destination_marker['lon'][0]
-    
+
     # Remove the previous flight line if it exists
     if flight_line is not None:
         fig.data = [trace for trace in fig.data if trace != flight_line]
-    
+
     # Add new flight line
     flight_line = go.Scattergeo(
         lon=[departure_lon, destination_lon],
@@ -194,6 +178,29 @@ def add_flight_line():
     )
     fig.add_trace(flight_line)
 
+# Function to get the scaling factors from GDP data based on departure ICAO code
+def get_scaling_factors(departure_code):
+    scaling_factors = []
+    first_two_letters = departure_code[:2]
+    country_code = country_codes.get(first_two_letters)
+    if country_code is None:
+        return scaling_factors
+    
+    # Find the row corresponding to the country code in GDPData.csv
+    country_row = gdp_data[gdp_data['Country'] == country_code]
+    if country_row.empty:
+        return scaling_factors
+    
+    # Starting from 2024, get the GDP growth rate until 2050 or until there is not a number anymore
+    for year in range(2024, 2051):
+        column_name = str(year)
+        if column_name in country_row.columns:
+            scaling_factors.append(country_row[column_name].values[0] / 100)  # Divide by 100 to get as a percentage
+        else:
+            break
+    
+    return scaling_factors
+
 # Function to get the value from the sparse matrix
 def get_sparse_value(departure_code, destination_code):
     try:
@@ -203,52 +210,39 @@ def get_sparse_value(departure_code, destination_code):
     except IndexError:
         return None
 
-# Function to get the GDP growth rate for a country
-def get_gdp_growth_rate(departure_code):
-    country_code = country_codes.get(departure_code[:2])
-    print(f"Departure ICAO: {departure_code}, Country code: {country_code}")  # Debugging line
-    if country_code:
-        gdp_row = gdp_data[gdp_data['ISO'] == country_code]
-        print(f"GDP row for country code {country_code}: {gdp_row}")  # Debugging line
-        if not gdp_row.empty:
-            try:
-                growth_rate = float(gdp_row['2024'].values[0]) / 100  # Assuming the GDP growth is in percentage
-                print(f"GDP growth rate: {growth_rate}")  # Debugging line
-                return growth_rate
-            except Exception as e:
-                print(f"Error retrieving growth rate: {e}")
-    return None
-
 # Create a DataFrame for the additional data
 df = pd.DataFrame({
     'Year': list(range(2024, 2051)),
     'Seats': [0] * 27
 })
 
-# Callback to update the Seats value for 2024 based on ICAO codes
+# Callback to update the Seats value based on ICAO codes
 @pn.depends(icao_departure_input.param.value, icao_destination_input.param.value, watch=True)
 def update_seats(departure_code, destination_code):
+    scaling_factors = get_scaling_factors(departure_code)
     value = get_sparse_value(departure_code, destination_code)
-    growth_rate = get_gdp_growth_rate(departure_code)
+
     print(f"Initial value from sparse matrix: {value}")  # Debugging line
     if value is not None:
         df.at[0, 'Seats'] = value
-        if growth_rate is not None:
-            for i in range(1, len(df)):
-                df.at[i, 'Seats'] = df.at[i - 1, 'Seats'] * (1 + growth_rate)
-                print(f"Year: {df.at[i, 'Year']}, Seats: {df.at[i, 'Seats']}, Growth Rate: {growth_rate}")  # Debugging line
-        else:
-            for i in range(1, len(df)):
-                df.at[i, 'Seats'] = df.at[i - 1, 'Seats']
-    else:
-        df['Seats'] = 0
     
+    if scaling_factors:
+        for i in range(1, len(df)):
+            if i < len(scaling_factors):
+                scaling_factor = scaling_factors[i - 1]  # Adjust index to start from 2024
+            else:
+                scaling_factor = scaling_factors[-1]  # Use the last available scaling factor
+            
+            df.at[i, 'Seats'] = df.at[i - 1, 'Seats'] * (1 + scaling_factor)
+            
+            print(f"Year: {df.at[i, 'Year']}, Seats: {df.at[i, 'Seats']}, Scaling Factor: {scaling_factor}")  # Debugging line
+
     # Update the DataFrame and line plot
     styled_data = df.style.set_table_styles({
         'Year': [{'selector': 'th', 'props': [('width', '100px')]}],
         'Seats': [{'selector': 'th', 'props': [('width', '100px')]}]
     }).hide(axis='index').to_html()
-    
+
     dataframe_pane.object = styled_data
     line_fig = px.line(df, x='Year', y='Seats', title='Seats Forecast', markers=True)
     line_graph_pane.object = line_fig
