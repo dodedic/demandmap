@@ -31,8 +31,11 @@ df = pd.DataFrame({
 # Function to get the scaling factors from GDP data based on departure ICAO code
 def get_scaling_factors(departure_code):
     scaling_factors = []
-    first_two_letters = departure_code[:2]
-    country_code = country_codes.get(first_two_letters)
+    if departure_code.startswith('K'):
+        country_code = "USA"
+    else:
+        first_two_letters = departure_code[:2]
+        country_code = country_codes.get(first_two_letters)
     if country_code is None:
         return scaling_factors
     

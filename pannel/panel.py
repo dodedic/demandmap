@@ -46,7 +46,10 @@ select = pn.widgets.Select(name='Legs',
                            options=['One-way', 'Round-trip'],
                            width=100, )
 
-year = pn.widgets.IntSlider(name='Year', start=2023, end=2050, step=1, value=2023, width=200)
+time_of_year = pn.widgets.Select(name='Timeframe',
+                           options=['All year', 'January','February','March','April','May','June','July','August','September','October','November','December'],
+                           width=100, )
+
 load_factor = pn.widgets.FloatSlider(name='Load Factor', start=0, end=1, step=0.01, value=0.8, width=200)
 
 
@@ -140,7 +143,7 @@ input_fields = pn.Row(
     select,
     icao_departure_input,
     icao_destination_input,
-    year,
+    time_of_year,
     load_factor,
     sizing_mode='stretch_width'
 )
