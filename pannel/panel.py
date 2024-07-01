@@ -4,6 +4,7 @@ import panel as pn
 import plotly.express as px
 import scipy.sparse
 import json
+import forecast_display
 from forecast_display import get_scaling_factors, get_sparse_value, df
 from map_creation import fig, add_airport_marker_departure, add_airport_marker_destination
 import airport_check
@@ -42,12 +43,12 @@ icao_destination_input = pn.widgets.TextInput(value='',
                                               width=100,
                                               stylesheets=[TEXT_INPUT_CSS])  # Add a CSS class for styling
 
-select = pn.widgets.Select(name='Legs',
+trip_indicator = pn.widgets.Select(name='Legs',
                            options=['One-way', 'Round-trip'],
                            width=100, )
 
 time_of_year = pn.widgets.Select(name='Timeframe',
-                           options=['All year', 'January','February','March','April','May','June','July','August','September','October','November','December'],
+                           options=['January','February','March','April','May','June','July','August','September','October','November','December', 'Whole year'],
                            width=100, )
 
 load_factor = pn.widgets.FloatSlider(name='Load Factor', start=0, end=1, step=0.01, value=0.8, width=200)
@@ -56,18 +57,21 @@ load_factor = pn.widgets.FloatSlider(name='Load Factor', start=0, end=1, step=0.
 dataframe_pane = pn.pane.HTML(width=400, height=200)
 
 # Create a Panel pane for the Plotly line graph
-line_fig = px.line(df, x='Year', y='Seats', title='Seats Forecast', markers=True)
+line_fig = px.line(df, x='Year', y='PAX', title='PAX Forecast', markers=True)
 line_graph_pane = pn.pane.Plotly(line_fig, width=800, height=500)
 
-# Callback to update the Seats value based on ICAO codes
-@pn.depends(icao_departure_input.param.value, icao_destination_input.param.value, watch=True)
-def update_seats(departure_code, destination_code):
+# Callback to update the Seats value based on ICAO codes, load factor, time of year, and trip indicator
+@pn.depends(icao_departure_input.param.value, icao_destination_input.param.value, load_factor.param.value, time_of_year.param.value, trip_indicator.param.value, watch=True)
+def update_seats(departure_code, destination_code, load_factor_value, time_of_year_value, trip_indicator_value):
+    # Set the time_of_year in the forecast_display module
+    forecast_display.set_time_of_year(time_of_year_value)
     scaling_factors = get_scaling_factors(departure_code)
-    value = get_sparse_value(departure_code, destination_code)
+    value = get_sparse_value(departure_code, destination_code, time_of_year_value, trip_indicator_value)  
 
     if value is not None:
         df.at[0, 'Seats'] = value
-    
+        df.at[0, 'PAX'] = value * load_factor_value
+
     if scaling_factors:
         for i in range(1, len(df)):
             if i < len(scaling_factors):
@@ -76,6 +80,7 @@ def update_seats(departure_code, destination_code):
                 scaling_factor = scaling_factors[-1]  # Use the last available scaling factor
             
             df.at[i, 'Seats'] = df.at[i - 1, 'Seats'] * (1 + scaling_factor)
+            df.at[i, 'PAX'] = df.at[i , 'Seats'] * load_factor_value    
             
             # Calculate percentage change
             prev_seats = df.at[i - 1, 'Seats']
@@ -90,11 +95,11 @@ def update_seats(departure_code, destination_code):
     # Update the DataFrame and line plot
     styled_data = df.style.set_table_styles({
         'Year': [{'selector': 'th', 'props': [('width', '100px')]}],
-        'Seats': [{'selector': 'th', 'props': [('width', '100px')]}],
+        'PAX': [{'selector': 'th', 'props': [('width', '100px')]}],
         'Percentage Change': [{'selector': 'th', 'props': [('width', '100px')]}]
     }).hide(axis='index').format({'Percentage Change': '{:.2f}%'}).to_html()  # Format percentage change column
     
-    line_fig = px.line(df, x='Year', y='Seats', title='Seats Forecast', markers=True)
+    line_fig = px.line(df, x='Year', y='PAX', title='Seats Forecast', markers=True)
     line_graph_pane.object = line_fig
     dataframe_pane.object = styled_data
 
@@ -140,7 +145,7 @@ template = pn.template.FastGridTemplate(
 
 # Combine all input fields into one panel
 input_fields = pn.Row(
-    select,
+    trip_indicator,
     icao_departure_input,
     icao_destination_input,
     time_of_year,
@@ -164,5 +169,3 @@ template.main[0:1, 0:9] = input_fields
 
 # Serve the template
 template.servable()
-
-
